@@ -14,15 +14,18 @@ import java.time.DayOfWeek;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
+import java.time.temporal.ChronoUnit;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.stream.Collectors;
+import java.util.stream.IntStream;
 
 
 //@Component
 public class ReadMakatFileImpl  {
 
     public static Clock DEFAULT_CLOCK = Clock.systemDefaultZone();
+    public static int YEAR = LocalDate.now(DEFAULT_CLOCK).getYear();
 
     //@Value("${gtfs.dir.location:/home/evyatar/logs/}")
     public String dirOfGtfsFiles = "/home/evyatar/logs/";
@@ -37,6 +40,8 @@ public class ReadMakatFileImpl  {
     public Map<String, List<MakatData> > mapByRoute = new HashMap<>();
     public Map<String, MakatData> mapDepartureTimesOfRoute = new HashMap<>();
     //public Map<LocalDateTime, List<MakatData>> mapMakatDataOfRouteByFromDate = new HashMap<>();
+    // key - routeId, value - RouteDeparture object
+    public Map<String, RouteDepartures> allRoutesDepartureTimesForDate = new HashMap<>();
 
     public ReadMakatFileImpl() {
     }
@@ -63,7 +68,9 @@ public class ReadMakatFileImpl  {
             }
             logger.info("makat file processing");
             LocalDate today = LocalDate.now();
-            mapDepartureTimesOfRoute = processMapByRoute(mapByRoute, today);
+            //mapDepartureTimesOfRoute = processMapByRoute(mapByRoute, today);
+            int month = today.getMonthValue();
+            allRoutesDepartureTimesForDate = processMapByRoute(mapByRoute, month);
             logger.warn("makatFile done");
             status = true;
         }
@@ -79,7 +86,13 @@ public class ReadMakatFileImpl  {
     }
 
 
-
+    /**
+     *
+     * @return map.
+     *      key - routeId,
+     *      value - List of all lines in makat file for that route.
+     *      each makat file line is represented by a MakatData object
+     */
     private Map<String, List<MakatData> > readMakatFile() {
         List<String> lines = readAllLinesOfMakatFileAndDoItFast();
         if (lines.isEmpty()) return new HashMap<>();
@@ -88,6 +101,75 @@ public class ReadMakatFileImpl  {
                 map(line -> parseMakatLine(line)).
                 collect(Collectors.groupingBy(MakatData::getRouteId));
         return mapByRoute;
+    }
+
+    /**
+     *
+     * @param mapByRoute
+     * @param month
+     * @return  map. key - routeId, value - a RouteDepartures object
+     */
+    private Map<String, RouteDepartures> processMapByRoute(Map<String, List<MakatData>> mapByRoute, int month) {
+        Map<String, RouteDepartures> mapOfRouteDepartures = new HashMap<>();
+        for (String routeId : mapByRoute.keySet()) {
+            RouteDepartures routeDepartures = new RouteDepartures();
+            routeDepartures.routeId = routeId;
+            routeDepartures.makat = mapByRoute.get(routeId).get(0).makat;
+            routeDepartures.departureTimesForDate = populateDepartures(routeId, month, mapByRoute);
+            mapOfRouteDepartures.put(routeId, routeDepartures);
+        }
+        return mapOfRouteDepartures;
+    }
+
+    /**
+     * collect departure times for this route in this month.
+     * collecting from a single makat file.
+     * This is an approximation. Actually we should collect for each day from its own makat file.
+     * @param routeId
+     * @param month
+     * @param mapByRoute
+     * @return
+     */
+    private Map<LocalDate,List<String>> populateDepartures(String routeId, int month, Map<String, List<MakatData>> mapByRoute) {
+        Map<LocalDate,List<String>> routeDepartures = new HashMap<>();
+        List<MakatData> allLines = mapByRoute.get(routeId);
+        for (LocalDate day : daysOfMonth(month, YEAR)) {
+            // use only text lines that has date range that includes this date
+            List<MakatData> linesOfRoute = allLines.stream()
+                    .filter(makatData -> !makatData.fromDate.isAfter(day) && !makatData.toDate.isBefore(day))
+                    .collect(Collectors.toList());
+            // collect all departure times from those text lines
+            List<String> departures = linesOfRoute.stream().map(makatData -> makatData.departure).collect(Collectors.toList());
+            departures.sort(Comparator.naturalOrder());
+            routeDepartures.put(day, departures);
+            logger.info(" {}, {}", day, departures);
+        }
+
+        return routeDepartures;
+    }
+
+    public List<LocalDate> daysOfMonth(int month, int year) {
+        LocalDate start = LocalDate.of(year, month, 1);
+        LocalDate end = start.plusMonths(1);
+        List<LocalDate> allDatesInMonth = getDatesBetweenUsingJava8(start, end);
+//        for (LocalDate day : allDatesInMonth) {
+//            logger.info(" {}", day);
+//        }
+        return allDatesInMonth;
+    }
+
+    /**
+     * taken from https://www.baeldung.com/java-between-dates
+     * @param startDate
+     * @param endDate
+     * @return
+     */
+    public static List<LocalDate> getDatesBetweenUsingJava8(LocalDate startDate, LocalDate endDate) {
+        long numOfDaysBetween = ChronoUnit.DAYS.between(startDate, endDate);
+        return IntStream.iterate(0, i -> i + 1)
+                .limit(numOfDaysBetween)
+                .mapToObj(i -> startDate.plusDays(i))
+                .collect(Collectors.toList());
     }
 
     private Map<String, MakatData> processMapByRoute(Map<String, List<MakatData>> mapByRoute, LocalDate startAtDate) {
@@ -116,7 +198,7 @@ public class ReadMakatFileImpl  {
                         logger.trace("departureTimesForDate has {} departures", departureTimesForDate.get(date.getDayOfWeek()).size());
                         logger.trace("departures for date {}: {}", date, departureTimesForDate.get(date.getDayOfWeek()));
                         MakatData template = linesOfRoute.get(0);
-                        template.departureTimesForDate = departureTimesForDate;
+                        //template.departureTimesForDate = departureTimesForDate;
                         template.tripId = "";
                         String key = generateKey(routeId, date);
                         mapDepartureTimesOfRoute.put(key, template);
@@ -193,26 +275,33 @@ public class ReadMakatFileImpl  {
         return routeId + "@" + date.getDayOfWeek().toString();
     }
 
-    public Map<DayOfWeek, List<String>> findDeparturesByRouteIdAndDate(String routeId, LocalDate date) {
-        if ( (mapDepartureTimesOfRoute == null) || mapDepartureTimesOfRoute.isEmpty()) {
-            return new HashMap<>();
+    //public Map<DayOfWeek, List<String>> findDeparturesByRouteIdAndDate(String routeId, LocalDate date) {
+    public List<String> findDeparturesByRouteIdAndDate(String routeId, LocalDate date) {
+        if ( (allRoutesDepartureTimesForDate == null) || allRoutesDepartureTimesForDate.isEmpty()) {
+        //if ( (mapDepartureTimesOfRoute == null) || mapDepartureTimesOfRoute.isEmpty()) {
+            return new ArrayList<>();
         }
         if (routeId == null || routeId.equals("")) {
             return null;
         }
-        MakatData md = mapDepartureTimesOfRoute.get(generateKey(routeId, date));
-        if (md == null) {
-            return new HashMap<>();
-        }
-        Map<DayOfWeek, List<String>> departures = new ConcurrentHashMap<>();
-        for (DayOfWeek theDay : md.departureTimesForDate.keySet()) {
-            departures.put(theDay, md.departureTimesForDate.get(theDay));
-        }
-
-        return departures;
+        return allRoutesDepartureTimesForDate.get(routeId).departureTimesForDate.get(date);
+//        MakatData md = mapDepartureTimesOfRoute.get(generateKey(routeId, date));
+//        if (md == null) {
+//            return new HashMap<>();
+//        }
+//        Map<DayOfWeek, List<String>> departures = new ConcurrentHashMap<>();
+////        for (DayOfWeek theDay : md.departureTimesForDate.keySet()) {
+////            departures.put(theDay, md.departureTimesForDate.get(theDay));
+////        }
+//
+//        return departures;
     }
 
-
+    private class RouteDepartures {
+        public String routeId;
+        public String makat;
+        public Map<LocalDate, List<String>> departureTimesForDate;
+    }
 
     private class MakatData {
         public String makat = "";
@@ -224,7 +313,7 @@ public class ReadMakatFileImpl  {
         public String tripId;
         public DayOfWeek dayOfWeek;
         public String departure;
-        public Map<DayOfWeek, List<String>> departureTimesForDate;
+        //public Map<DayOfWeek, List<String>> departureTimesForDate;
 
         public MakatData(String makat, String routeId, String direction, String alternative, LocalDate fromDate, LocalDate toDate, String tripId, DayOfWeek dayOfWeek, String departure) {
             this.makat = makat;
@@ -257,15 +346,15 @@ public class ReadMakatFileImpl  {
                     ", fromDate=" + fromDate +
                     ", toDate=" + toDate +
                     ", tripId='" + tripId + '\'';
-            if (departureTimesForDate == null) {
-                s = s + ", dayOfWeek=" + dayOfWeek +
-                        ", departure='" + departure + '\'' +
-                        '}';
-            }
-            else {
-                s = s + ", departures='" + departureTimesForDate.toString() + '\'' +
-                        '}';
-            }
+//            if (departureTimesForDate == null) {
+//                s = s + ", dayOfWeek=" + dayOfWeek +
+//                        ", departure='" + departure + '\'' +
+//                        '}';
+//            }
+//            else {
+//                s = s + ", departures='" + departureTimesForDate.toString() + '\'' +
+//                        '}';
+//            }
             return s ;
         }
     }

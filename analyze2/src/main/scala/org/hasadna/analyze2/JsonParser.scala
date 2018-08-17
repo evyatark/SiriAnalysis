@@ -1,15 +1,16 @@
 package org.hasadna.analyze2
 
-import java.time.DayOfWeek
 
-import com.fasterxml.jackson.databind.{DeserializationFeature, MapperFeature, ObjectMapper, SerializationFeature}
+import com.fasterxml.jackson.databind.{ObjectMapper, SerializationFeature}
 import com.fasterxml.jackson.module.scala.DefaultScalaModule
 import com.fasterxml.jackson.module.scala.experimental.ScalaObjectMapper
+import org.slf4j.{Logger, LoggerFactory}
 
 import scala.io.Source
 import scala.util.Try
 
 class JsonParser(val filename: String) {
+  val logger : Logger = LoggerFactory.getLogger(getClass.getName)
 
   def f ( line : String) : String = {
     val ret = if (!line.contains("activeRanges")) line
@@ -21,10 +22,25 @@ class JsonParser(val filename: String) {
     ret
   }
 
+  def retrieveDepartureTimes() : List[(String, Option[Any])] = {
+    val json = Source.fromFile(filename).getLines().map(line => f(line)).mkString("\n")
+    val mapper = new ObjectMapper() with ScalaObjectMapper
+    mapper.registerModule(DefaultScalaModule)
+    val parsedJson = mapper.readValue[Map[String, List[Map[String, Any]]]](json)
+    val data = parsedJson("data") // List of Map Objects
+    val list = data.map(item => (item("lineRef").toString, item.get("departureTimes") ))
+//    for (item : Map [String, Any] <- data) {
+//      if (item.contains("departureTimes")) {
+//        println(item("departureTimes"))
+//      }
+//    }
+    list
+  }
+
   def parseJson() : List[BusLineData] = {
 
     // read
-    println(s"Reading $filename ...")
+    logger.info(s"Reading $filename ...")
     val json = Source.fromFile(filename).getLines().map(line => f(line)).mkString("\n")
     //val json = Source.fromFile(filename)
     // parse
@@ -125,7 +141,7 @@ class JsonParser(val filename: String) {
     mapper.registerModule(DefaultScalaModule)
     mapper.enable(SerializationFeature.INDENT_OUTPUT)
     val json = mapper.writeValueAsString(obj)
-    println(json)
+    //println(json)
     json
   }
 

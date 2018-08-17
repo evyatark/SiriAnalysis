@@ -2,14 +2,17 @@ package org.hasadna.analyze2
 
 import java.time.{LocalDate, LocalDateTime, ZoneOffset}
 
-import scala.util.Try
+import org.slf4j.{Logger, LoggerFactory}
+
 
 class Main {
+
+  val logger : Logger = LoggerFactory.getLogger(getClass.getName)
 
   val filesLocation = System.getProperty("siri.results.dir", "/home/evyatar/logs/work/" );
   val monthToAnalyze = System.getProperty("siri.month.analysis", "08");
   //val filterBusLines = List("18", "50", "51", "110", "111", "150")
-  val filterBusLines = List("412")
+  val filterBusLines = List("420", "415")
   //val filterBusLines = List()
 
   val scheduleFileToAnalyze = 4 ;   // 1 - means we analyze allLines1 (see below), 2, 3, etc
@@ -26,17 +29,14 @@ class Main {
 
   def findDescriptions(allLinesGroupedByMakat: Map[String, List[BusLineData]]) : Map[String, String] = {
     for ((makat, routes) <- allLinesGroupedByMakat) yield {
-      val longDescription = routes(0).description
+      val longDescription = routes(0).description.split("Direction")(0)
       (makat, longDescription)
     }
   }
 
 
   def start(args: Array[String]): Unit = {
-//    val analyzePolygons = new AnalyzePolygons()
-//    analyzePolygons.start()
-//    if (true) return
-    println("reading json...")
+    logger.info("reading json...")
 
     val allLines1 : List[BusLineData] = (new JsonParser("/home/evyatar/logs/siri.schedule.18.Monday.json.2018-08-13")).parseJson()
     val allLines2: List[BusLineData] = (new JsonParser("/home/evyatar/logs/siri.schedule.5.Monday.json.2018-08-13")).parseJson()
@@ -46,7 +46,7 @@ class Main {
     val allLines5 : List[BusLineData] = (new JsonParser("/home/evyatar/logs/siri.schedule.misc.Monday.json.2018-08-13")).parseJson()
     val allLines6 : List[BusLineData] = (new JsonParser("/home/evyatar/logs/siri.schedule.misc2.Tuesday.json.2018-08-14")).parseJson()
     val allLines0 : Array[List[BusLineData]] = Array(null, allLines1, allLines2, allLines3, allLines4, allLines5, allLines6)
-    println("reading json... completed")
+    logger.info("reading json... completed")
 
 
 
@@ -66,17 +66,18 @@ class Main {
 
     val ap = new AnalyzeDepartures(filesLocation , monthToAnalyze, ignoreTheseTimes)
     ap.init();
+    ap.routesDescription = allLines.map(busLine => (busLine.lineRef -> busLine.description)).toMap
 
-    println(s"processing ${allLinesGroupedByMakat.keySet.size} bus lines ($lineNames)")
+    logger.info(s"processing ${allLinesGroupedByMakat.keySet.size} bus lines ($lineNames)")
 
-    val makatDescriptions : Map[String, String] = findDescriptions(allLinesGroupedByMakat)
+    ap.makatsDescription = findDescriptions(allLinesGroupedByMakat)
     var counter = 0 ;
     val total = allLinesGroupedByMakat.keySet.size
     val resultsByMakat =
       for ((makat, routes) <- allLinesGroupedByMakat) yield {
         val lineShortName = routes(0).lineShortName
         counter = counter + 1
-        println(s"\n\nmakat $makat  $lineShortName ${makatDescriptions(makat)}")
+        logger.info(s"makat $makat  $lineShortName ${ap.makatsDescription(makat)}")
 
         // listOfTuples: each tuple is (lineShortName, routeId, makat),
         val listOfTuples = routes.map(route =>
@@ -86,7 +87,7 @@ class Main {
 
         // these are results of all routes of one makat
         //results.foreach(println)
-        println(s"${counter*100/total}% completed")
+        logger.debug(s"${counter*100/total}% completed")
 
         (makat, results)
       }

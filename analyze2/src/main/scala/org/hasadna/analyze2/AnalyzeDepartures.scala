@@ -1,11 +1,11 @@
 package org.hasadna.analyze2
 
 import java.io.File
+import java.time.format.DateTimeFormatter
 import java.time.{DayOfWeek, LocalDate, LocalDateTime, LocalTime}
-import java.util
-import java.util.Map.Entry
 import java.util.concurrent.Executors
-import java.util.stream.Collectors
+
+import org.slf4j.{Logger, LoggerFactory}
 
 import scala.concurrent.ExecutionContext
 import scala.collection.mutable.ListBuffer
@@ -16,11 +16,14 @@ import scala.collection.JavaConverters._
 
 class AnalyzeDepartures(val filesLocation : String, val month : String, ignoreTheseTimes : List[String]) {
 
+  val logger : Logger = LoggerFactory.getLogger(getClass.getName)
 
+  var makatsDescription : Map[String, String] = Map.empty[String, String]   // key is makat (e.g "13324", value is description (e.g " --- קו 324 מבית שמש אל קרית גת  --- Makat 13324  ---" )
+  var routesDescription : Map[String, String] = Map.empty[String, String]   // key is routeId (e.g "20846", value is description (e.g " --- קו 324 מבית שמש אל קרית גת  --- Makat 13324  --- Direction 1  --- Alternative 0  " )
   val trace = false
 
 
-  // we limit to 2 concurrent threads, because each thread reads a whole file to memory
+  // we limit to X concurrent threads, because each thread reads a whole file to memory
   // more threads cause OutOfMemory error or Heap error
   // in general, each thread needs about 2GB memory so for 2 threads
   // you should add -Xmx2g to the java command line
@@ -40,12 +43,11 @@ class AnalyzeDepartures(val filesLocation : String, val month : String, ignoreTh
 
   }
 
-  // TODO use content of siri.schedule.json to enrich description here
+  // allBusLines is list of tuples(lineShortName, routeId, makat)
   def processAll(allBusLines : List[(String, String, String)]) : List[DeparturesAnalysisResult] = {    //List[String] = {
 
 
     def produce() : Future[List[DeparturesAnalysisResult]] = {
-      //val results: List[Future[List[String]]] =
       val results: List[Future[DeparturesAnalysisResult]] =
         for ((line, route, makat) <- allBusLines) yield {
           Future {
@@ -56,11 +58,11 @@ class AnalyzeDepartures(val filesLocation : String, val month : String, ignoreTh
     }
 
 
-    println(s"processing these routes: $allBusLines ...")
+    logger.debug(s"processing these routes: $allBusLines ...")
 
-    val result = Await.result(produce(), Duration.Inf)  //.flatten
+    val result = Await.result(produce(), Duration.Inf)
 
-    println(s"processing routes ... completed")
+    logger.debug(s"processing routes ... completed")
 
     result
   }
@@ -74,14 +76,17 @@ class AnalyzeDepartures(val filesLocation : String, val month : String, ignoreTh
   def toScala(x : java.util.Map[DayOfWeek, java.util.List[String]]) : Map[DayOfWeek, List[String]] = {
     val jMap = new java.util.HashMap[DayOfWeek, List[String]]()
 
-    for ( entry : Entry[DayOfWeek, java.util.List[String]] <- x.entrySet) {
-        jMap.put(entry.getKey, toScalaList(entry.getValue) )
-    }
-//    for (item : DayOfWeek <- x.keySet().toArray()) {
-//      jMap.put(item, toScalaList(x.get(item)))
+//    for ( entry : Entry[DayOfWeek, java.util.List[String]] <- x.entrySet) {
+//        jMap.put(entry.getKey, toScalaList(entry.getValue) )
 //    }
+    for (item <- x.keySet().toArray()) {
+      val y : List[String] = toScalaList(x.get(item))
+      val key = item.asInstanceOf[DayOfWeek]
+      jMap.put(key, y)
+    }
     jMap.asScala.toMap
   }
+
 
   def compareDepartures(departuresFromGtfs: Map[DayOfWeek, List[String]], departuresFromSiri: List[String], date: LocalDate) = {
     val gtfsDepartures = departuresFromGtfs.get(date.getDayOfWeek).get
@@ -106,13 +111,50 @@ class AnalyzeDepartures(val filesLocation : String, val month : String, ignoreTh
     result
   }
 
-  def findAimedDeparturesFromScheduleFile(busLine: String, route: String, date: LocalDate) = {
+  def findSchedulesFile(filesLocation: String, agency: String, date: LocalDate) : String = {
+    val dateAsStr = date.format(DateTimeFormatter.ISO_DATE)
+    val f = new File(filesLocation)
+    if (f.isDirectory) {
+      val allScheduleFiles = f.listFiles().filter(file => file.getName.startsWith(s"siri.schedule.$agency")).toList
+      var dateOfFile = date
+      var exactDate = allScheduleFiles.filter(file => file.getName.endsWith(dateOfFile.format(DateTimeFormatter.ISO_DATE)))
+      while (exactDate.isEmpty) {
+        dateOfFile = dateOfFile.plusDays(1)
+        exactDate = allScheduleFiles.filter(file => file.getName.endsWith(dateOfFile.format(DateTimeFormatter.ISO_DATE)))
+        if (dateOfFile.isAfter(date.plusDays(31))) {
+          exactDate = List(new File("/tmp/"))
+        }
+      }
+      exactDate.head.getAbsolutePath
+    } else ""
+  }
+
+  def findAimedDeparturesFromScheduleFile(busLine: String, route: String, date: LocalDate) : Map[DayOfWeek, List[String]] = {
     // read the siri.schedule.nn.DAY_OF_WEEK.json.yyyy-MM-dd file, take aimed departures from there
-    val fileName = filesLocation
+    val fileName = findSchedulesFile(filesLocation, "16", date)
+    //Source.fromFile(fileName).getLines();
+    val x1 = new JsonParser(fileName).retrieveDepartureTimes()
+    val x2 = x1.filter(item => item._1.equals(route))
+    if (x2.isEmpty) {
+      Map[DayOfWeek, List[String]]()
+    }
+    else if (x2.head._2.equals(None)) {
+      Map[DayOfWeek, List[String]]()
+    }
+    else {
+      val x3: (String, Option[Any]) = x2.head
+      val x4 = x3._2
+      val key: String = x4.asInstanceOf[Map.Map1[String, Any]].keySet.head.toString
+      val list = x4.asInstanceOf[Map.Map1[String, Any]].values.head
+      Map[DayOfWeek, List[String]](DayOfWeek.valueOf(key) -> list.asInstanceOf[List[String]])
+    }
+    //val dayOfWeekMap = for (item <- x2) yield (DayOfWeek.valueOf("SUNDAY") -> item._2.asInstanceOf[List[String]])
+    //dayOfWeekMap.toMap
+    //x4
   }
 
   def processBusLine(busLine: String, route: String, makat : String, makatFile : ReadMakatFileImpl) : DeparturesAnalysisResult = {
-    println(s"$busLine \n($route) ")
+    logger.info(s"$busLine\t\t($route) ")
     //val departures = makatFile.findDeparturesByRouteId(route)
 
     val resultsForAllDays = (1 to 31).map( day => {
@@ -120,13 +162,25 @@ class AnalyzeDepartures(val filesLocation : String, val month : String, ignoreTh
         val date = LocalDate.of(year, month.toInt, day)
         if (siriDataFilesExist(date, filesLocation)) {
           val dayOfWeek = date.getDayOfWeek
-          val departures: java.util.Map[DayOfWeek, java.util.List[String]] = makatFile.findDeparturesByRouteIdAndDate(route, date)
-          val departuresFromSiri = findAimedDeparturesFromSiriResults(busLine, route, date)
-          val departuresFromSchedule = findAimedDeparturesFromScheduleFile(busLine, route, date)
+
+          // departures from Schedule file
+          //==================================
+          //val departuresFromSchedule = findAimedDeparturesFromScheduleFile(busLine, route, date)
+          //processDay(busLine, route, day, getReadingsForDate(month, day, filesLocation, route), departuresFromSchedule, dayOfWeek, date)
           //println(s"day $day route $route - found ${departures(dayOfWeek).size()} departures")
-          val departuresFromGtfs = if (departures == null) Map[DayOfWeek, List[String]]() else toScala(departures)
           //compareDepartures(departuresFromGtfs, departuresFromSiri, date)
+
+          // departures from Makat file
+          //==================================
+          //val departures: java.util.Map[DayOfWeek, java.util.List[String]] = makatFile.findDeparturesByRouteIdAndDate(route, date)
+          //val departuresFromGtfs = if (departures == null) Map[DayOfWeek, List[String]]() else toScala(departures)
           //processDay(busLine, route, day, getReadingsForDate(month, day, filesLocation, route), departuresFromGtfs, dayOfWeek, date)
+
+          // departures from Siri results
+          //==================================
+          // results from Siri
+          val departuresFromSiri = findAimedDeparturesFromSiriResults(busLine, route, date)
+          logger.debug(s"$dayOfWeek $date route $route - found ${departuresFromSiri.size} departures")
           processDay(busLine, route, day, getReadingsForDate(month, day, filesLocation, route), Map((dayOfWeek, departuresFromSiri)), dayOfWeek, date)
         }
         else None
@@ -141,15 +195,16 @@ class AnalyzeDepartures(val filesLocation : String, val month : String, ignoreTh
     val percentMissing = if (aimedTotal == 0) 0 else (missingTotal*100/aimedTotal).toInt
     val percentLate = if (aimedTotal == 0) 0 else  (lateTotal*100/aimedTotal).toInt
 
-    val departuresAnalysisResult = DeparturesAnalysisResult(makat = makat, lineShortName = busLine, lineDescription = "",
-      routes = RouteAnalysisResult(routeId=route, alternative="", direction="", routeDescription = "",
-        routeResults = resultsForAllDays.flatten.toList,  // RouteResults(dayOfWeek = day, date = "", late = List(), missing = List(), aimed = List(),
-        routeTotals = RouteTotals(aimedTotal, missingTotal, s"$percentMissing%", lateTotal, s"$percentLate%")
+    val departuresAnalysisResult = DeparturesAnalysisResult(makat = makat, lineShortName = busLine, lineDescription = makatsDescription(makat),
+      routes = RouteAnalysisResult(
+        routeId=route, routeDescription = routesDescription(route),    // alternative="", direction="",
+        routeTotals =RouteTotals(aimedTotal, missingTotal, s"$percentMissing%", lateTotal, s"$percentLate%"),
+        routeResults = resultsForAllDays.flatten.toList  // RouteResults(dayOfWeek = day, date = "", late = List(), missing = List(), aimed = List(),
+
       )
     )
 
-    // debug
-    //new JsonParser("dummy").toJson(departuresAnalysisResult) ;
+    logger.debug(new JsonParser("dummy").toJson(departuresAnalysisResult.routes.routeTotals)) ;
 
     //ret
     departuresAnalysisResult
@@ -169,44 +224,38 @@ class AnalyzeDepartures(val filesLocation : String, val month : String, ignoreTh
                   departures : Map[DayOfWeek, List[String]],
                  dayOfWeek : DayOfWeek,
                  dateOfThisDay : LocalDate)      : Option[RouteDailyResults] = {
-    print(".")
+    //print(".")
     if (readingsOfThatDay.isEmpty) return None
     val dayName = createDayName(day)
     //dayName.flatMap( dayName => {
-      val aimedDeparturesFromMakatFile : List[String] =
+    val aimedDeparturesFromMakatFile : List[String] =
         (if (departures.contains(dayOfWeek)) departures(dayOfWeek) else List.empty)
           .filter(dep => shouldNotBeIgnored(dateOfThisDay.toString + "T" + dep))
-      if (trace) println(s"route $route day $day , get lines for this date and route")
-      if (trace) println(s"find missing departures for day $day route $route")
-      val (aimedDepartures, missingDepartures, lateDepartures) = findMissingDeparturesForLine(line, route, readingsOfThatDay, aimedDeparturesFromMakatFile)
-      if (trace) println("find missing departures completed");
+    logger.trace(s"route $route day $day , get lines for this date and route")
+    logger.trace(s"find missing departures for day $day route $route")
+    val (aimedDepartures, missingDepartures, lateDepartures) = findMissingDeparturesForLine(line, route, readingsOfThatDay, aimedDeparturesFromMakatFile)
+    logger.trace("find missing departures completed");
 
-      if (trace) println("create report...")
-      val date = f"2018-${month}-" + f"${day}%02d"
-      val header = (  f"$dayName%10s  $date" + "\t\t")
-      val body = if (!aimedDepartures.isEmpty) {
+    logger.trace("create report...")
+    val date = f"2018-${month}-" + f"${day}%02d"
+    val header = (  f"$dayName%10s  $date" + "\t\t")
+    val body = if (!aimedDepartures.isEmpty) {
         Some(displayProblems(line, route, aimedDepartures, missingDepartures, lateDepartures))
-      } else None
-//      val ret = body match {
-//        case Some(body) => Some(header + body)
-//        case None => None
-//      }
-      if (trace) println("create report...completed")
-      var latePercent = 0
-      var missingPercent = 0
-      if (!aimedDepartures.isEmpty) {
+    } else None
+    logger.trace("create report...completed")
+    var latePercent = 0
+    var missingPercent = 0
+    if (!aimedDepartures.isEmpty) {
         latePercent = (lateDepartures.size * 100 / aimedDepartures.size).toInt
         missingPercent = (missingDepartures.size * 100 / aimedDepartures.size).toInt
-      }
-      val mp = s"${missingDepartures.size}/${aimedDepartures.size} = $missingPercent%"
-      val routeResults = RouteDailyResults(dayName, date, lateDepartures,latePercent, missingDepartures,mp, aimedDepartures)
-      //ret
-      val ret = body match {
+    }
+    val mp = s"${missingDepartures.size}/${aimedDepartures.size} = $missingPercent%"
+    val routeResults = RouteDailyResults(dayName, date, lateDepartures,latePercent, missingDepartures,mp, aimedDepartures)
+    val ret = body match {
         case Some(body) => Some(routeResults)
         case None => None
-      }
-      ret
-    //} )
+    }
+    ret
   }
 
 
@@ -247,20 +296,16 @@ class AnalyzeDepartures(val filesLocation : String, val month : String, ignoreTh
     //println(s"-------------------")
     for (dep <- aimedDepartures) {
       if (missingDepartures.contains(dep)) {
-        print(s"\n\n$dep\t")
-        print(s"======> missing!")
-        println("\n")
+        logger.trace(s"\n\n$dep\t" + s"======> missing!" )
       }
       else if (lateDepartures.contains(dep)) {
-        print(s"\n$dep\t")
-        print(s"================> late (by more than 3 minutes)")
-        println("")
+        logger.trace(s"\n$dep\t" + s"================> late (by more than 3 minutes)" )
       }
       else {
-        print(s"$dep\t")
+        logger.trace(s"$dep\t")
       }
     }
-    println("")
+    //println("")
   }
 
   def findFiles(day: Int, month: String, fileLocation: String): List[String] = {
@@ -287,7 +332,7 @@ class AnalyzeDepartures(val filesLocation : String, val month : String, ignoreTh
   }
 
   def getReadingsForDate(month : String, day : Int, fileLocation : String, route : String) : List[Reading] = {
-    if (trace) println(s"retrieving lines for day $day for route $route")
+    logger.trace(s"retrieving lines for day $day for route $route")
     val files : List[String] = findFiles(day, month, fileLocation)
     var all : ListBuffer[Reading] = ListBuffer.empty
     for (file <- files) {
@@ -318,7 +363,7 @@ class AnalyzeDepartures(val filesLocation : String, val month : String, ignoreTh
     for (dep <- aimedDepartures) {
       //println(s"investigating departure $dep")
       if (dep.substring(0, 2).toInt > 23) {
-        println(s"currently ignoring departure $dep")
+        logger.trace(s"currently ignoring departure $dep")
       }
       else {
         val depTime = LocalTime.parse(dep)
@@ -397,7 +442,7 @@ class AnalyzeDepartures(val filesLocation : String, val month : String, ignoreTh
     val day = date.getDayOfMonth
 
 
-    findAimedDeparturesFromSiriResults("412",   //lineShortName,
+    findAimedDeparturesFromSiriResults(lineShortName,
                                       routeId,
                                       getReadingsForDate(month, day, filesLocation, routeId))
   }

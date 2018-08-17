@@ -8,11 +8,12 @@ case class DeparturesAnalysisResult (
 
 case class RouteAnalysisResult (
   val routeId : String,
-  val alternative : String,
-  val direction : String,
   val routeDescription : String,
-  val routeResults : List[RouteDailyResults],
-  val routeTotals: RouteTotals){}
+  val routeTotals: RouteTotals,
+//  val alternative : String,
+//  val direction : String,
+  val routeResults : List[RouteDailyResults]
+                               ){}
 
 case class RouteDailyResults (
     val dayOfWeek : String,
