@@ -22,6 +22,10 @@ class JsonParser(val filename: String) {
     ret
   }
 
+  /**
+    *
+    * @return list of tuples, each tuple is (routeId, departureTimes of that date and route (List[String]))
+    */
   def retrieveDepartureTimes() : List[(String, Option[Any])] = {
     val json = Source.fromFile(filename).getLines().map(line => f(line)).mkString("\n")
     val mapper = new ObjectMapper() with ScalaObjectMapper

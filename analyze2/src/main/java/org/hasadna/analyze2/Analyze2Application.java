@@ -11,6 +11,7 @@ public class Analyze2Application {
 		SpringApplication.run(Analyze2Application.class, args);
 		//new LogAnalyzer().start(args);
 		Main mainClass = new Main();
-		mainClass.start(args);
+		mainClass.start(args);	// original. quite slow
+		//mainClass.start1(args);	// trying an improved algorithm, but currently does not work
 	}
 }
