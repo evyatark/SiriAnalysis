@@ -45,7 +45,7 @@ class AnalyzeDepartures(val filesLocation : String, val month : String, ignoreTh
   def init() = {
     // read makat file
     readMakat = new ReadMakatFileImpl()
-    readMakat.init(month.toInt);
+//    readMakat.init(month.toInt);
 
   }
 

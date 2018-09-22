@@ -3,7 +3,9 @@ package org.hasadna.analyze2;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.context.annotation.Scope;
 import org.springframework.stereotype.Component;
 import org.springframework.util.StringUtils;
 
@@ -20,7 +22,9 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 
-
+//@Component
+//@Qualifier("ReadMakatFileImpl")
+//@Scope(value = "prototype")
 public class ReadMakatFileImpl  {
 
 
@@ -47,12 +51,15 @@ public class ReadMakatFileImpl  {
     public static Clock DEFAULT_CLOCK = Clock.systemDefaultZone();
     public static int YEAR = LocalDate.now(DEFAULT_CLOCK).getYear();
 
-    //@Value("${gtfs.dir.location:/home/evyatar/logs/}")
-    public String dirOfGtfsFiles = "/home/evyatar/logs/work/";
+    @Value("${gtfs.dir.location.prefix:/home/evyatar/logs/}")
+    public String dirOfGtfsFilesPrefix = "/home/evyatar/logs/work/";
+
+    @Value("${gtfs.dir.location.date.part:2018-MM}")
+    public String datePart = "2018-MM";
 
 
-    private String makatFileName = "makat2018-08-16.txt";
-    private String makatFullPath = dirOfGtfsFiles + makatFileName;
+    private String makatFileName = "TripIdToDate2018-MM-dd.txt";  //"TripIdToDate2018-08-16.txt";
+    private String makatFullPath = "";  //dirOfGtfsFiles + makatFileName;
 
     protected final static Logger logger = LoggerFactory.getLogger("console");
 
@@ -69,15 +76,25 @@ public class ReadMakatFileImpl  {
     boolean status = false;
 
     //@PostConstruct
-    public void init(int month) {
+    public void init(int month, int day) {
         if (status) return;
         status = false;
-        logger.info("init in PostConstruct started");
-        dirOfGtfsFiles = "/home/evyatar/logs/work/";
+        logger.info("init in ReadMakatFileImpl started");
+
+        String monthStr = intAsStrOf2Digits(month);
+        String dirOfGtfsFiles = dirOfGtfsFilesPrefix + datePart + "/makat/";
         if (!dirOfGtfsFiles.endsWith("/")) {
             dirOfGtfsFiles = dirOfGtfsFiles + "/";
         }
         makatFullPath = dirOfGtfsFiles + makatFileName;
+        makatFullPath = makatFullPath.replace("MM", monthStr).replace("dd", intAsStrOf2Digits(day));
+
+        if (!(new File(makatFullPath)).exists()) {
+            // makat file of that day does not exist
+            logger.info("makat file {} not found!", makatFullPath);
+            // we will use another makat file from a nearby day
+            makatFullPath = findMakatFileOfClosestDay(day);
+        }
 
         try {
             logger.warn("makatFile read starting - {}", makatFullPath);
@@ -98,6 +115,18 @@ public class ReadMakatFileImpl  {
         }
 
         logger.info("init in PostConstruct completed");
+    }
+
+    private String findMakatFileOfClosestDay(int day) {
+        return "";  // temporary
+    }
+
+    private String intAsStrOf2Digits(int i) {
+        String str = Integer.toString(i);
+        if (str.length() == 1) {
+            str = "0" + str;
+        }
+        return str;
     }
 
     public boolean getStatus() {

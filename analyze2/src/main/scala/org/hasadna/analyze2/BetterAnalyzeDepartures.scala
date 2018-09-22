@@ -42,7 +42,7 @@ class BetterAnalyzeDepartures(val filesLocation : String, val month : String, ig
   def init() = {
     // read makat file
     readMakat = new ReadMakatFileImpl()
-    readMakat.init(month.toInt);
+    //readMakat.init(month.toInt);
 
   }
 
